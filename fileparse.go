@@ -32,7 +32,7 @@ func getIntialItems() ([]todoitem, error) {
 			fmt.Println("Invalid type")
 			return []todoitem{}, err
 		}
-		priority, err := strconv.Atoi(todo[3])
+		priority, err := strconv.Atoi(todo[2])
 		if err != nil {
 			fmt.Println("Invalid type")
 			return []todoitem{}, err
@@ -40,10 +40,36 @@ func getIntialItems() ([]todoitem, error) {
 		todoitems = append(todoitems, todoitem{
 			id:       id,
 			done:     done,
-			todo:     todo[2],
+			todo:     todo[3],
 			priority: priority,
-			notes:    todo[4],
 		})
 	}
 	return todoitems, nil
+}
+
+func saveTasksToCSV(items []todoitem) error {
+	file, err := os.Create("todo.csv")
+	if err != nil {
+		fmt.Println("Failed to create CSV file")
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	for _, item := range items {
+		record := []string{
+			strconv.Itoa(item.id),
+			strconv.FormatBool(item.done),
+			strconv.Itoa(item.priority),
+			item.todo,
+		}
+		if err := writer.Write(record); err != nil {
+			fmt.Println("Failed to write record")
+			return err
+		}
+	}
+
+	return nil
 }
