@@ -4,72 +4,126 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a command-line todo list application written in Go. It provides a terminal UI for managing tasks with priorities and completion status. The application reads tasks from a CSV file (`todo.csv`) and displays them in an interactive interface using the Bubble Tea framework.
+This is a command-line todo list application written in Go. It provides a terminal UI for managing tasks with priorities and completion status. The application uses SQLite for persistence and Bubble Tea framework for interactive terminal UI.
 
 ## Architecture
+
+### Directory Structure
+
+```
+cmd/app/
+├── main.go           # Application entry point
+├── model.go          # Data model and state management
+├── handlers.go       # Keyboard/input event handling
+├── render.go         # UI rendering and display
+├── db.go             # Database operations and schemas
+├── utils.go          # Utility functions (date parsing)
+└── constants.go      # Styling, keyboard shortcuts, and constants
+```
 
 ### Core Components
 
 1. **TUI Framework**: Built with Charmbracelet libraries:
    - `bubbletea` - Main terminal UI framework
    - `lipgloss` - Terminal styling and layout
-   - `bubbles` - Reusable components (e.g., text input)
+   - `bubbles` - Reusable components (textinput, viewport)
 
 2. **Data Layer**:
-   - Currently reads from `todo.csv` file (via `fileparse.go`)
-   - Partial SQLite integration started (`db.go`) but not yet functional
-   - CSV format: `id,done,todo_text,priority,notes`
+   - SQLite database (`todo.db`) with two tables:
+     - `todolists` - Manages multiple todo lists/workspaces
+     - `tasks` - Individual tasks linked to todolists
+   - Full CRUD operations for both tables
 
-3. **Model Structure** (`main.go`):
-   - `model` struct contains the application state (items, cursor position, screen dimensions)
-   - Uses Bubble Tea's Update/View pattern for state management and rendering
+3. **Model Structure** (`model.go`):
+   - `model` struct contains application state
+   - Tracks current todolist and cursor position
+   - Uses Bubble Tea's Update/View pattern
 
 4. **Styling** (`constants.go`):
-   - Style definitions for different task priorities (colors 1-4)
-   - Styles for selected items, completed items, and title
+   - Style definitions for priorities (colors 1-4)
+   - Keyboard shortcuts and constants
+   - Input modes and view states
 
-### Key Data Structure
+### Key Data Structures
 
-`todoitem` struct (db.go):
-- `id` (int)
-- `done` (bool)
-- `todo` (string)
-- `priority` (int) - Values 1-4, each with distinct colors
-- `notes` (string)
-- `datecompleted` (int) - Unix timestamp
-- `dateadded` (int) - Unix timestamp
+**todoitem** struct (db.go):
+- `id`, `done`, `todo`, `priority`, `duedate`
+- `dateadded`, `datecompleted` - Unix timestamps
+- `todolistID` - Links to parent todolist
+- `deleted`, `deletedat` - Soft delete support
+
+**todolist** struct (db.go):
+- `id`, `name`, `displayOrder`
+- `archived` - Hide without deleting
+- `createdAt`, `updatedAt` - Unix timestamps
 
 ## Build & Run
 
 ```bash
 # Build the application
-go build
+go build -o commandlinetodo ./cmd/app
 
 # Run the application
 ./commandlinetodo
 
-# Run tests (none currently exist)
+# Run tests
 go test ./...
 ```
 
-## Keyboard Controls
+## Current Features
 
-- `q` or `Ctrl+C` - Quit
-- `k` or `Up` - Move cursor up
-- `j` or `Down` - Move cursor down
-- `Space` or `Enter` - Toggle task completion status
-- Bottom option "Enter a new task" is selectable but not yet functional
+### Task Management
+- `a` - Add new task
+- `e` - Edit task
+- `d` - Delete task
+- `t` - Set due date
+- `Space`/`Enter` - Toggle completion
+- `k`/`↑`, `j`/`↓` - Navigate tasks
+- `q`/`Ctrl+C` - Quit
+
+### Todo List Management (Planned)
+- `l` - Open list selector modal
+- `n` - Create new list
+- List rename, delete, and archive (in development)
 
 ## Development Notes
 
-- **CSV Parsing** (`fileparse.go`): The `getIntialItems()` function reads from `todo.csv` on startup. Error handling currently returns early without persistence.
-- **Database** (`db.go`): SQLite table is defined but the `addToDB()` function is not implemented. The database is opened but not currently used.
-- **Persistence**: Changes made in the UI are not saved back to the CSV or database - this is a gap in the implementation.
-- **New Task Creation**: The UI shows "Enter a new task" as an option but doesn't have input handling implemented for creating new tasks.
+### Completed Features
+- ✅ Full SQLite database integration
+- ✅ Task CRUD operations with persistence
+- ✅ Priority levels (1-4) with color coding
+- ✅ Due date support with overdue detection
+- ✅ Task soft deletion
+- ✅ Code organization in cmd/app structure
 
-## Common Issues & Known Gaps
+### In Development
+- 🔄 **Multiple Todo Lists** (Current feature being implemented)
+  - Phase 1: Model & database layer
+  - Phase 2: List selector UI
+  - Phase 3: List creation
+  - Phase 4: List management (rename/delete/archive)
+  - Phase 5: Data migration for existing tasks
 
-- No persistence of task state changes
-- Database layer incomplete (schema defined but operations not implemented)
-- New task creation UI is visible but non-functional
-- Text input components imported but not used in the current implementation
+### Known Gaps
+- Tasks may have inconsistent `todolist_id` values from old data
+- No archive functionality for lists yet
+- No list reordering capability
+
+## Implementation Plan: Multiple Todo Lists
+
+See `/home/bill/.claude/plans/buzzing-juggling-volcano.md` for detailed implementation plan.
+
+### Quick Summary
+Users can manage multiple todo lists with:
+- **Switch lists**: Press `w` to open selector
+- **Create list**: Press `n` for new list
+- **Manage**: Rename, delete, archive lists
+- **Persistence**: All changes saved to SQLite
+
+### Files Being Modified
+- `cmd/app/model.go` - Add todolist tracking
+- `cmd/app/db.go` - Add list CRUD functions
+- `cmd/app/handlers.go` - Keyboard handlers for lists
+- `cmd/app/render.go` - List selector UI
+- `cmd/app/constants.go` - New keyboard shortcuts
+- `cmd/app/main.go` - Load todolists on startup
