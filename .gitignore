@@ -16,9 +16,6 @@
 coverage.*
 *.coverprofile
 profile.cov
-*.db
-commandlinetodo
-CLAUDE.md
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
@@ -29,7 +26,7 @@ go.work.sum
 # env file
 .env
 
-
-# Editor/IDE
-# .idea/
-# .vscode/
+todo
+*.db
+commandlinetodo
+CLAUDE.md

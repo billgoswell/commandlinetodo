@@ -205,7 +205,7 @@ func (m model) handleMainKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case KeyCtrlC, KeyQ:
 		return m, tea.Quit
-	case KeyW:
+	case KeyL:
 		m.listSelectorOpen = true
 		m.listCursorPos = m.currentListIndex
 		m.viewport.Height = m.getViewportHeight(m.height)
@@ -279,155 +279,173 @@ func (m model) toggleTaskDone(visibleIndex int) {
 }
 
 func (m model) handleListSelector(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Handle delete confirmation
 	if m.listDeleteConfirm {
-		switch msg.String() {
-		case KeyY:
-			if m.listCursorPos < len(m.todolists) {
-				selectedListID := m.todolists[m.listCursorPos].id
-				if err := deleteTodoList(selectedListID); err != nil {
-					fmt.Println("Error deleting list:", err)
-					m.resetListManageState()
-					return m, nil
-				}
-				// Remove deleted list from todolists
-				m.todolists = append(m.todolists[:m.listCursorPos], m.todolists[m.listCursorPos+1:]...)
-				if m.listCursorPos >= len(m.todolists) && m.listCursorPos > 0 {
-					m.listCursorPos--
-				}
-				// If deleted list was current, switch to first available
-				if selectedListID == m.currentListID && len(m.todolists) > 0 {
-					m.currentListIndex = 0
-					m.currentListID = m.todolists[0].id
-					m.cursor = 0
-					m.scrollOffset = 0
-				}
-			}
-			m.resetListManageState()
-			return m, nil
-		case KeyN, KeyEsc:
-			m.listDeleteConfirm = false
-			m.listManageMode = true
-			return m, nil
-		}
-		return m, nil
+		return m.handleListDeleteConfirm(msg)
 	}
-
-	// Handle manage mode
 	if m.listManageMode {
-		switch msg.String() {
-		case KeyR:
-			// Enter rename mode
-			if m.listCursorPos < len(m.todolists) {
-				m.listManageMode = false
-				m.inputActive = true
-				m.inputMode = InputModeListName
-				m.listManageAction = "rename"
-				m.textInput.SetValue(m.todolists[m.listCursorPos].name)
-				m.textInput.Focus()
-				m.viewport.Height = m.getViewportHeight(m.height)
-			}
-			return m, nil
-		case KeyD:
-			// Show delete confirmation
-			m.listDeleteConfirm = true
-			return m, nil
-		case KeyA:
-			// Toggle archive
-			if m.listCursorPos < len(m.todolists) {
-				selectedList := m.todolists[m.listCursorPos]
-				if selectedList.archived {
-					if err := unarchiveTodoList(selectedList.id); err != nil {
-						fmt.Println("Error unarchiving list:", err)
-						return m, nil
-					}
-					m.todolists[m.listCursorPos].archived = false
-				} else {
-					if err := archiveTodoList(selectedList.id); err != nil {
-						fmt.Println("Error archiving list:", err)
-						return m, nil
-					}
-					m.todolists[m.listCursorPos].archived = true
-					// If archived list was current, switch to first available non-archived
-					if selectedList.id == m.currentListID {
-						for i, list := range m.todolists {
-							if !list.archived {
-								m.currentListIndex = i
-								m.currentListID = list.id
-								m.cursor = 0
-								m.scrollOffset = 0
-								break
-							}
-						}
-					}
-				}
-			}
-			m.resetListManageState()
-			return m, nil
-		case KeyEsc:
-			m.listManageMode = false
-			return m, nil
-		}
-		return m, nil
+		return m.handleListManageMode(msg)
 	}
+	return m.handleListNavigation(msg)
+}
 
-	// Normal list selector navigation
+func (m model) handleListDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case KeyY:
+		m.deleteCurrentList()
+	case KeyN, KeyEsc:
+		m.listDeleteConfirm = false
+		m.listManageMode = true
+	}
+	return m, nil
+}
+
+func (m model) handleListManageMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case KeyR:
+		m.enterRenameMode()
+	case KeyD:
+		m.listDeleteConfirm = true
+	case KeyA:
+		m.toggleListArchive()
+	case KeyEsc:
+		m.listManageMode = false
+	}
+	return m, nil
+}
+
+func (m model) handleListNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case KeyUp, KeyK:
 		if m.listCursorPos > 0 {
 			m.listCursorPos--
 		}
-		return m, nil
 	case KeyDown, KeyJ:
 		if m.listCursorPos < len(m.todolists) {
 			m.listCursorPos++
 		}
-		return m, nil
 	case KeyM:
-		// Enter manage mode (only if cursor on a list, not on "Create New List")
 		if m.listCursorPos < len(m.todolists) {
 			m.listManageMode = true
 			m.viewport.Height = m.getViewportHeight(m.height)
 		}
-		return m, nil
 	case KeyEnter:
-		// Check if "Create New List" is selected
-		if m.listCursorPos == len(m.todolists) {
-			m.listSelectorOpen = false
-			m.inputActive = true
-			m.inputMode = InputModeListName
-			m.textInput.Reset()
-			m.textInput.Focus()
-			m.viewport.Height = m.getViewportHeight(m.height)
-			return m, nil
-		}
-		// Switch to selected list
-		if m.listCursorPos < len(m.todolists) {
-			m.currentListIndex = m.listCursorPos
-			m.currentListID = m.todolists[m.listCursorPos].id
-			m.cursor = 0
-			m.scrollOffset = 0
-			// Reload items for the new list
-			m.listSelectorOpen = false
-			m.viewport.Height = m.getViewportHeight(m.height)
-		}
-		return m, nil
+		m.handleListSelection()
 	case KeyN:
-		// Create new list from list selector
-		m.listSelectorOpen = false
-		m.inputActive = true
-		m.inputMode = InputModeListName
-		m.textInput.Reset()
-		m.textInput.Focus()
-		m.viewport.Height = m.getViewportHeight(m.height)
-		return m, nil
+		m.startCreateNewList()
 	case KeyEsc:
-		m.listSelectorOpen = false
-		m.resetListManageState()
-		m.viewport.Height = m.getViewportHeight(m.height)
-		return m, nil
+		m.closeListSelector()
 	}
 	return m, nil
+}
+
+// Helper functions for list operations
+func (m *model) deleteCurrentList() {
+	if m.listCursorPos >= len(m.todolists) {
+		m.resetListManageState()
+		return
+	}
+
+	selectedListID := m.todolists[m.listCursorPos].id
+	if err := deleteTodoList(selectedListID); err != nil {
+		fmt.Println("Error deleting list:", err)
+		m.resetListManageState()
+		return
+	}
+
+	m.todolists = append(m.todolists[:m.listCursorPos], m.todolists[m.listCursorPos+1:]...)
+	if m.listCursorPos >= len(m.todolists) && m.listCursorPos > 0 {
+		m.listCursorPos--
+	}
+
+	if selectedListID == m.currentListID && len(m.todolists) > 0 {
+		m.switchToList(0)
+	}
+	m.resetListManageState()
+}
+
+func (m *model) enterRenameMode() {
+	if m.listCursorPos >= len(m.todolists) {
+		return
+	}
+	m.listManageMode = false
+	m.inputActive = true
+	m.inputMode = InputModeListName
+	m.listManageAction = "rename"
+	m.textInput.SetValue(m.todolists[m.listCursorPos].name)
+	m.textInput.Focus()
+	m.viewport.Height = m.getViewportHeight(m.height)
+}
+
+func (m *model) toggleListArchive() {
+	if m.listCursorPos >= len(m.todolists) {
+		return
+	}
+
+	selectedList := m.todolists[m.listCursorPos]
+	if selectedList.archived {
+		if err := unarchiveTodoList(selectedList.id); err != nil {
+			fmt.Println("Error unarchiving list:", err)
+			return
+		}
+		m.todolists[m.listCursorPos].archived = false
+	} else {
+		if err := archiveTodoList(selectedList.id); err != nil {
+			fmt.Println("Error archiving list:", err)
+			return
+		}
+		m.todolists[m.listCursorPos].archived = true
+		if selectedList.id == m.currentListID {
+			m.switchToFirstNonArchivedList()
+		}
+	}
+	m.resetListManageState()
+}
+
+func (m *model) switchToFirstNonArchivedList() {
+	for i, list := range m.todolists {
+		if !list.archived {
+			m.switchToList(i)
+			return
+		}
+	}
+}
+
+func (m *model) handleListSelection() {
+	// "Create New List" option
+	if m.listCursorPos == len(m.todolists) {
+		m.startCreateNewList()
+		return
+	}
+	// Switch to selected list
+	if m.listCursorPos < len(m.todolists) {
+		m.switchToList(m.listCursorPos)
+		m.closeListSelector()
+	}
+}
+
+func (m *model) switchToList(index int) {
+	if index < 0 || index >= len(m.todolists) {
+		return
+	}
+	m.currentListIndex = index
+	m.currentListID = m.todolists[index].id
+	m.cursor = 0
+	m.scrollOffset = 0
+}
+
+func (m *model) startCreateNewList() {
+	m.listSelectorOpen = false
+	m.inputActive = true
+	m.inputMode = InputModeListName
+	m.textInput.Reset()
+	m.textInput.Focus()
+	m.viewport.Height = m.getViewportHeight(m.height)
+}
+
+func (m *model) closeListSelector() {
+	m.listSelectorOpen = false
+	m.resetListManageState()
+	m.viewport.Height = m.getViewportHeight(m.height)
 }
 
 func (m model) handleListNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -487,6 +505,25 @@ func (m model) handleListNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// Unified state reset function
+func (m *model) resetAllState() {
+	m.inputActive = false
+	m.inputMode = ""
+	m.newTaskText = ""
+	m.newPriority = DefaultPriority
+	m.newDueDate = 0
+	m.editDueDateMode = false
+	m.editMode = false
+	m.editIndex = -1
+	m.deleteConfirm = false
+	m.confirmDeleteIndex = -1
+	m.listManageMode = false
+	m.listManageAction = ""
+	m.listDeleteConfirm = false
+	m.textInput.Reset()
+}
+
+// Specific reset functions for convenience (delegate to resetAllState where possible)
 func (m *model) resetInputState() {
 	m.inputActive = false
 	m.inputMode = ""

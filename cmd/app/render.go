@@ -50,41 +50,33 @@ func (m model) View() string {
 			s = append(s, TitleStyle.Render("(Enter days like '3' or date like '12/25/2025', press Enter to skip, Esc to cancel)"))
 		}
 	}
-	s = append(s, "Press w for lists, a to add, e to edit, t to set due date, d to delete, q to quit.\n")
+	s = append(s, "Press l for lists, a to add, e to edit, t to set due date, d to delete, q to quit.\n")
 	return strings.Join(s, "\n")
 }
 
 func (m *model) priorityDisplay() string {
-	priorityDisplay := "Select priority:\n"
-	priorityColors := []string{
-		OneStyle.Render("1: 🟥 High"),
-		TwoStyle.Render("2: 🟧 Medium-High"),
-		ThreeStyle.Render("3: 🟨 Medium"),
-		FourStyle.Render("4: 🟩 Low"),
-	}
-	for i, p := range priorityColors {
-		if m.newPriority == i+1 {
-			priorityDisplay += SelectedStyle.Render("▶ "+p) + "\n"
+	lines := []string{"Select priority:"}
+	priorities := []int{PriorityHigh, PriorityMedHigh, PriorityMed, PriorityLow}
+
+	for _, priority := range priorities {
+		label := fmt.Sprintf("%d: %s", priority, PriorityLabels[priority])
+		styledLabel := PriorityStyles[priority].Render(label)
+
+		if m.newPriority == priority {
+			lines = append(lines, SelectedStyle.Render("▶ "+styledLabel))
 		} else {
-			priorityDisplay += "  " + p + "\n"
+			lines = append(lines, "  "+styledLabel)
 		}
 	}
-	return priorityDisplay
+	return strings.Join(lines, "\n")
 }
 
 func (m *model) updateViewport() {
-	// Calculate how many lines each task takes
+	// Filter items for the current list
+	visibleItems := m.filterItemsByList(m.currentListID)
 	viewportHeight := m.viewport.Height
 
-	// Filter items for the current list
-	var visibleItems []todoitem
-	for _, item := range m.items {
-		if item.todolistID == m.currentListID {
-			visibleItems = append(visibleItems, item)
-		}
-	}
-
-	// Adjust cursor to stay within bounds of visible items
+	// Adjust cursor to stay within bounds
 	if m.cursor >= len(visibleItems) {
 		m.cursor = len(visibleItems) - 1
 	}
@@ -102,20 +94,16 @@ func (m *model) updateViewport() {
 	}
 
 	var taskLines []string
-
 	for i, item := range visibleItems {
 		dateStr := m.formatTaskTimestamps(item)
 		dueStr := m.formatDueDate(item)
-
 		c := fmt.Sprintf("%s\n%s%s\n", item.todo, dateStr, dueStr)
-
 		style := m.getStyle(i, item)
 		c = style.Render(c)
 		taskLines = append(taskLines, c)
 	}
 
 	m.viewport.SetContent(strings.Join(taskLines, "\n"))
-
 	m.viewport.YOffset = m.scrollOffset * LinesPerTask
 }
 
@@ -162,61 +150,50 @@ func (m *model) formatDueDate(item todoitem) string {
 }
 
 func (m model) getStyle(i int, item todoitem) lipgloss.Style {
-	var style lipgloss.Style
 	if m.cursor == i && item.done {
-		style = SelectedDoneStyle
-	} else if m.cursor == i {
-		// Check if overdue
-		if item.duedate > 0 && item.duedate < time.Now().Unix() && !item.done {
-			style = OverdueStyle
-		} else {
-			switch item.priority {
-			case 1:
-				style = SelectedOneStyle
-			case 2:
-				style = SelectedTwoStyle
-			case 3:
-				style = SelectedThreeStyle
-			case 4:
-				style = SelectedFourStyle
-			default:
-				style = SelectedStyle
-			}
-		}
-	} else if item.done {
-		style = DoneStyle
-	} else {
-		// Check if overdue
-		if item.duedate > 0 && item.duedate < time.Now().Unix() {
-			style = OverdueStyle
-		} else {
-			switch item.priority {
-			case 1:
-				style = OneStyle
-			case 2:
-				style = TwoStyle
-			case 3:
-				style = ThreeStyle
-			case 4:
-				style = FourStyle
-			}
-		}
+		return SelectedDoneStyle
 	}
-	return style
+
+	isOverdue := item.duedate > 0 && item.duedate < time.Now().Unix() && !item.done
+	if isOverdue {
+		if m.cursor == i {
+			return OverdueStyle
+		}
+		return OverdueStyle
+	}
+
+	if m.cursor == i {
+		if selectedStyle, exists := SelectedPriorityStyles[item.priority]; exists {
+			return selectedStyle
+		}
+		return SelectedStyle
+	}
+
+	if item.done {
+		return DoneStyle
+	}
+
+	if style, exists := PriorityStyles[item.priority]; exists {
+		return style
+	}
+	return ItemStyle
 }
 
 func (m model) getViewportHeight(totalHeight int) int {
 	availableHeight := totalHeight - ViewportBaseLines
 	additionalHeight := 0
+
 	if m.listSelectorOpen {
-		additionalHeight = len(m.todolists) + 5
+		// List selector height = header + lists + "Create New List" option + help text + spacing
+		additionalHeight = len(m.todolists) * HeightAdjustListPerItem
+		additionalHeight += 5 // Header, spacing, help text
 	} else if m.editMode || m.inputActive {
-		additionalHeight = 6
+		additionalHeight = HeightAdjustDefault
 		if m.inputMode == InputModePriority {
-			additionalHeight = 11
+			additionalHeight = HeightAdjustPriority
 		}
 	} else if m.deleteConfirm {
-		additionalHeight = 2
+		additionalHeight = HeightAdjustDelete
 	}
 
 	return availableHeight - additionalHeight
@@ -289,35 +266,36 @@ func (m *model) renderListSelector() string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *model) getVisibleItemCount() int {
-	count := 0
+// filterItemsByList returns all items for a specific list
+func (m *model) filterItemsByList(listID int) []todoitem {
+	var filtered []todoitem
 	for _, item := range m.items {
-		if item.todolistID == m.currentListID {
-			count++
+		if item.todolistID == listID {
+			filtered = append(filtered, item)
 		}
 	}
-	return count
+	return filtered
+}
+
+func (m *model) getVisibleItemCount() int {
+	return len(m.filterItemsByList(m.currentListID))
 }
 
 func (m *model) getVisibleItemActualIndex(visibleIndex int) int {
-	count := 0
+	filteredItems := m.filterItemsByList(m.currentListID)
+	if visibleIndex < 0 || visibleIndex >= len(filteredItems) {
+		return -1
+	}
+	// Find the actual index in m.items
+	targetItem := filteredItems[visibleIndex]
 	for i, item := range m.items {
-		if item.todolistID == m.currentListID {
-			if count == visibleIndex {
-				return i
-			}
-			count++
+		if item.id == targetItem.id {
+			return i
 		}
 	}
 	return -1
 }
 
 func (m *model) countTasksInList(listID int) int {
-	count := 0
-	for _, item := range m.items {
-		if item.todolistID == listID {
-			count++
-		}
-	}
-	return count
+	return len(m.filterItemsByList(listID))
 }
