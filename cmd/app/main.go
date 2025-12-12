@@ -11,36 +11,37 @@ func main() {
 	_, err := initDB()
 	if err != nil {
 		fmt.Println("Failed to initialize database:", err)
-		return
+		os.Exit(1)
 	}
+	defer db.Close()
 
-	// Load todolists
-	todolists, err := getTodoLists()
+	// Load todoLists
+	todoLists, err := getTodoLists()
 	if err != nil {
-		fmt.Println("Failed to load todolists:", err)
+		fmt.Println("Failed to load todoLists:", err)
 		return
 	}
 
 	// If no lists exist, create a default "General" list
-	if len(todolists) == 0 {
+	if len(todoLists) == 0 {
 		id, err := createTodoList("General")
 		if err != nil {
-			fmt.Println("Failed to create default todolist:", err)
+			fmt.Println("Failed to create default todoList:", err)
 			return
 		}
-		todolists = []todolist{{id: id, name: "General", archived: false}}
+		todoLists = []todoList{{id: id, name: "General", archived: false}}
 	}
 
-	todoitems, err := getItemsFromDB()
+	todoItems, err := getItemsFromDB()
 	if err != nil {
 		fmt.Println("Failed to load items:", err)
 		return
 	}
-	m := intialModel(todoitems, todolists)
+	m := initialModel(todoItems, todoLists)
 	m.sortItems()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error starting tea: %v", err)
+		os.Exit(1)
 	}
-	os.Exit(1)
 }

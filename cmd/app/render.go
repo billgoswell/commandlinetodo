@@ -50,6 +50,9 @@ func (m model) View() string {
 			s = append(s, TitleStyle.Render("(Enter days like '3' or date like '12/25/2025', press Enter to skip, Esc to cancel)"))
 		}
 	}
+	if m.errorMsg != "" {
+		s = append(s, ErrorStyle.Render("Error: "+m.errorMsg))
+	}
 	s = append(s, "Press l for lists, a to add, e to edit, t to set due date, d to delete, q to quit.\n")
 	return strings.Join(s, "\n")
 }
@@ -107,16 +110,16 @@ func (m *model) updateViewport() {
 	m.viewport.YOffset = m.scrollOffset * LinesPerTask
 }
 
-func (m *model) formatTaskTimestamps(item todoitem) string {
+func (m *model) formatTaskTimestamps(item todoItem) string {
 	var dateStr string
-	if item.dateadded > 0 {
-		t := time.Unix(item.dateadded, 0)
+	if item.dateAdded > 0 {
+		t := time.Unix(item.dateAdded, 0)
 		dateStr = "added " + timediff.TimeDiff(t)
 	}
 
 	// Add completion time if task is done
-	if item.done && item.datecompleted > 0 {
-		t := time.Unix(item.datecompleted, 0)
+	if item.done && item.dateCompleted > 0 {
+		t := time.Unix(item.dateCompleted, 0)
 		completedStr := "completed " + timediff.TimeDiff(t)
 		dateStr = dateStr + " | " + completedStr
 	}
@@ -124,19 +127,19 @@ func (m *model) formatTaskTimestamps(item todoitem) string {
 	return dateStr
 }
 
-func (m *model) formatDueDate(item todoitem) string {
+func (m *model) formatDueDate(item todoItem) string {
 
-	if item.duedate == 0 {
+	if item.dueDate == 0 {
 		return ""
 	}
 
 	now := time.Now().Unix()
-	if item.duedate < now {
+	if item.dueDate < now {
 		return " | OVERDUE"
 	}
 
 	// Calculate days until due
-	daysUntil := (item.duedate - now) / SecondsPerDay
+	daysUntil := (item.dueDate - now) / SecondsPerDay
 	if daysUntil == 0 {
 		return " | due today"
 	}
@@ -149,12 +152,12 @@ func (m *model) formatDueDate(item todoitem) string {
 
 }
 
-func (m model) getStyle(i int, item todoitem) lipgloss.Style {
+func (m model) getStyle(i int, item todoItem) lipgloss.Style {
 	if m.cursor == i && item.done {
 		return SelectedDoneStyle
 	}
 
-	isOverdue := item.duedate > 0 && item.duedate < time.Now().Unix() && !item.done
+	isOverdue := item.dueDate > 0 && item.dueDate < time.Now().Unix() && !item.done
 	if isOverdue {
 		if m.cursor == i {
 			return OverdueStyle
@@ -185,7 +188,7 @@ func (m model) getViewportHeight(totalHeight int) int {
 
 	if m.listSelectorOpen {
 		// List selector height = header + lists + "Create New List" option + help text + spacing
-		additionalHeight = len(m.todolists) * HeightAdjustListPerItem
+		additionalHeight = len(m.todoLists) * HeightAdjustListPerItem
 		additionalHeight += 5 // Header, spacing, help text
 	} else if m.editMode || m.inputActive {
 		additionalHeight = HeightAdjustDefault
@@ -200,8 +203,8 @@ func (m model) getViewportHeight(totalHeight int) int {
 }
 
 func (m *model) getCurrentListName() string {
-	if m.currentListIndex >= 0 && m.currentListIndex < len(m.todolists) {
-		return m.todolists[m.currentListIndex].name
+	if m.currentListIndex >= 0 && m.currentListIndex < len(m.todoLists) {
+		return m.todoLists[m.currentListIndex].name
 	}
 	return "Unknown"
 }
@@ -210,8 +213,8 @@ func (m *model) renderListSelector() string {
 	var lines []string
 
 	// Show delete confirmation if needed
-	if m.listDeleteConfirm && m.listCursorPos < len(m.todolists) {
-		selectedList := m.todolists[m.listCursorPos]
+	if m.listDeleteConfirm && m.listCursorPos < len(m.todoLists) {
+		selectedList := m.todoLists[m.listCursorPos]
 		taskCount := m.countTasksInList(selectedList.id)
 		lines = append(lines, TitleStyle.Render("Delete List"))
 		lines = append(lines, fmt.Sprintf("Delete '%s'? This will delete %d task(s).", selectedList.name, taskCount))
@@ -220,13 +223,13 @@ func (m *model) renderListSelector() string {
 	}
 
 	// Show management options if in manage mode
-	if m.listManageMode && m.listCursorPos < len(m.todolists) {
+	if m.listManageMode && m.listCursorPos < len(m.todoLists) {
 		lines = append(lines, TitleStyle.Render("Manage List"))
-		lines = append(lines, fmt.Sprintf("List: %s", m.todolists[m.listCursorPos].name))
+		lines = append(lines, fmt.Sprintf("List: %s", m.todoLists[m.listCursorPos].name))
 		lines = append(lines, "")
 		lines = append(lines, "r: Rename")
 		lines = append(lines, "d: Delete")
-		if m.todolists[m.listCursorPos].archived {
+		if m.todoLists[m.listCursorPos].archived {
 			lines = append(lines, "a: Unarchive")
 		} else {
 			lines = append(lines, "a: Archive")
@@ -238,7 +241,7 @@ func (m *model) renderListSelector() string {
 	lines = append(lines, TitleStyle.Render("Select list:"))
 
 	// Render list options
-	for i, list := range m.todolists {
+	for i, list := range m.todoLists {
 		if i == m.listCursorPos {
 			lines = append(lines, SelectedStyle.Render("▶ "+list.name))
 		} else {
@@ -248,7 +251,7 @@ func (m *model) renderListSelector() string {
 
 	// Add create new list option
 	lines = append(lines, "")
-	if m.listCursorPos == len(m.todolists) {
+	if m.listCursorPos == len(m.todoLists) {
 		lines = append(lines, SelectedStyle.Render("▶ Create New List (n)"))
 	} else {
 		lines = append(lines, "  Create New List (n)")
@@ -256,7 +259,7 @@ func (m *model) renderListSelector() string {
 
 	// Show hint for manage mode
 	var hint string
-	if m.listCursorPos < len(m.todolists) {
+	if m.listCursorPos < len(m.todoLists) {
 		hint = "(Use k/↑ and j/↓ to navigate, Enter to select, m for manage, Esc to cancel)"
 	} else {
 		hint = "(Use k/↑ and j/↓ to navigate, Enter to select, Esc to cancel)"
@@ -266,15 +269,24 @@ func (m *model) renderListSelector() string {
 	return strings.Join(lines, "\n")
 }
 
-// filterItemsByList returns all items for a specific list
-func (m *model) filterItemsByList(listID int) []todoitem {
-	var filtered []todoitem
+// filterItemsByList returns all items for a specific list (cached)
+func (m *model) filterItemsByList(listID int) []todoItem {
+	if m.filteredListID == listID && m.filteredItems != nil {
+		return m.filteredItems
+	}
+	var filtered []todoItem
 	for _, item := range m.items {
-		if item.todolistID == listID {
+		if item.todoListID == listID {
 			filtered = append(filtered, item)
 		}
 	}
+	m.filteredItems = filtered
+	m.filteredListID = listID
 	return filtered
+}
+
+func (m *model) invalidateCache() {
+	m.filteredItems = nil
 }
 
 func (m *model) getVisibleItemCount() int {

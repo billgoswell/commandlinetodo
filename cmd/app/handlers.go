@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -15,7 +14,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = msg.Width
 		m.viewport.Height = m.getViewportHeight(msg.Height)
 	case tea.KeyMsg:
-		// Check list selector mode first
+		m.errorMsg = ""
 		if m.listSelectorOpen {
 			return m.handleListSelector(msg)
 		}
@@ -51,9 +50,9 @@ func (m model) handleEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		editedText := m.textInput.Value()
 		if editedText != "" && m.editIndex >= 0 && m.editIndex < len(m.items) {
 			m.items[m.editIndex].todo = editedText
-			m.items[m.editIndex].todolistID = m.currentListID
+			m.items[m.editIndex].todoListID = m.currentListID
 			if err := updateItemInDB(m.items[m.editIndex]); err != nil {
-				fmt.Println("Error updating task:", err)
+				m.errorMsg = "Failed to update task: " + err.Error()
 			}
 		}
 		m.resetEditState()
@@ -71,7 +70,7 @@ func (m model) handleDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		actualIndex := m.getVisibleItemActualIndex(m.confirmDeleteIndex)
 		if actualIndex >= 0 && actualIndex < len(m.items) {
 			if err := markItemAsDeleted(m.items[actualIndex].id); err != nil {
-				fmt.Println("Error deleting task:", err)
+				m.errorMsg = "Failed to delete task: " + err.Error()
 			}
 			m.items = append(m.items[:actualIndex], m.items[actualIndex+1:]...)
 			if m.cursor >= m.getVisibleItemCount() && m.cursor > 0 {
@@ -164,30 +163,30 @@ func (m model) handleDueDateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewport.Height = m.getViewportHeight(m.height)
 		return m, nil
 	case KeyEnter:
-		duedate := parseDueDate(m.textInput.Value())
+		dueDate := parseDueDate(m.textInput.Value())
 		if m.editDueDateMode {
 			// Editing due date on existing task
 			if m.editIndex >= 0 && m.editIndex < len(m.items) {
-				m.items[m.editIndex].duedate = duedate
-				m.items[m.editIndex].todolistID = m.currentListID
+				m.items[m.editIndex].dueDate = dueDate
+				m.items[m.editIndex].todoListID = m.currentListID
 				if err := updateItemInDB(m.items[m.editIndex]); err != nil {
-					fmt.Println("Error updating task:", err)
+					m.errorMsg = "Failed to update task: " + err.Error()
 				}
 			}
 			m.resetInputState()
 			return m, nil
 		}
 		// Creating new task
-		newTask := todoitem{
+		newTask := todoItem{
 			done:       false,
 			todo:       m.newTaskText,
 			priority:   m.newPriority,
-			dateadded:  time.Now().Unix(),
-			duedate:    duedate,
-			todolistID: m.currentListID,
+			dateAdded:  time.Now().Unix(),
+			dueDate:    dueDate,
+			todoListID: m.currentListID,
 		}
 		if err := saveItemToDB(newTask); err != nil {
-			fmt.Println("Error saving task:", err)
+			m.errorMsg = "Failed to save task: " + err.Error()
 		}
 		m.items = append(m.items, newTask)
 		m.sortItems()
@@ -268,12 +267,12 @@ func (m model) toggleTaskDone(visibleIndex int) {
 	}
 	m.items[actualIndex].done = !m.items[actualIndex].done
 	if m.items[actualIndex].done {
-		m.items[actualIndex].datecompleted = time.Now().Unix()
+		m.items[actualIndex].dateCompleted = time.Now().Unix()
 	} else {
-		m.items[actualIndex].datecompleted = 0
+		m.items[actualIndex].dateCompleted = 0
 	}
 	if err := updateItemInDB(m.items[actualIndex]); err != nil {
-		fmt.Println("Error updating task:", err)
+		m.errorMsg = "Failed to update task: " + err.Error()
 	}
 	m.sortItems()
 }
@@ -320,11 +319,11 @@ func (m model) handleListNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.listCursorPos--
 		}
 	case KeyDown, KeyJ:
-		if m.listCursorPos < len(m.todolists) {
+		if m.listCursorPos < len(m.todoLists)-1 {
 			m.listCursorPos++
 		}
 	case KeyM:
-		if m.listCursorPos < len(m.todolists) {
+		if m.listCursorPos < len(m.todoLists) {
 			m.listManageMode = true
 			m.viewport.Height = m.getViewportHeight(m.height)
 		}
@@ -340,60 +339,70 @@ func (m model) handleListNavigation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // Helper functions for list operations
 func (m *model) deleteCurrentList() {
-	if m.listCursorPos >= len(m.todolists) {
+	if m.listCursorPos >= len(m.todoLists) {
 		m.resetListManageState()
 		return
 	}
 
-	selectedListID := m.todolists[m.listCursorPos].id
+	selectedListID := m.todoLists[m.listCursorPos].id
 	if err := deleteTodoList(selectedListID); err != nil {
-		fmt.Println("Error deleting list:", err)
+		m.errorMsg = "Failed to delete list: " + err.Error()
 		m.resetListManageState()
 		return
 	}
 
-	m.todolists = append(m.todolists[:m.listCursorPos], m.todolists[m.listCursorPos+1:]...)
-	if m.listCursorPos >= len(m.todolists) && m.listCursorPos > 0 {
+	// Remove tasks belonging to this list from memory
+	var remainingItems []todoItem
+	for _, item := range m.items {
+		if item.todoListID != selectedListID {
+			remainingItems = append(remainingItems, item)
+		}
+	}
+	m.items = remainingItems
+	m.invalidateCache()
+
+	m.todoLists = append(m.todoLists[:m.listCursorPos], m.todoLists[m.listCursorPos+1:]...)
+	if m.listCursorPos >= len(m.todoLists) && m.listCursorPos > 0 {
 		m.listCursorPos--
 	}
 
-	if selectedListID == m.currentListID && len(m.todolists) > 0 {
+	if selectedListID == m.currentListID && len(m.todoLists) > 0 {
 		m.switchToList(0)
 	}
 	m.resetListManageState()
 }
 
 func (m *model) enterRenameMode() {
-	if m.listCursorPos >= len(m.todolists) {
+	if m.listCursorPos >= len(m.todoLists) {
 		return
 	}
 	m.listManageMode = false
 	m.inputActive = true
 	m.inputMode = InputModeListName
 	m.listManageAction = "rename"
-	m.textInput.SetValue(m.todolists[m.listCursorPos].name)
+	m.textInput.SetValue(m.todoLists[m.listCursorPos].name)
 	m.textInput.Focus()
 	m.viewport.Height = m.getViewportHeight(m.height)
 }
 
 func (m *model) toggleListArchive() {
-	if m.listCursorPos >= len(m.todolists) {
+	if m.listCursorPos >= len(m.todoLists) {
 		return
 	}
 
-	selectedList := m.todolists[m.listCursorPos]
+	selectedList := m.todoLists[m.listCursorPos]
 	if selectedList.archived {
 		if err := unarchiveTodoList(selectedList.id); err != nil {
-			fmt.Println("Error unarchiving list:", err)
+			m.errorMsg = "Failed to unarchive list: " + err.Error()
 			return
 		}
-		m.todolists[m.listCursorPos].archived = false
+		m.todoLists[m.listCursorPos].archived = false
 	} else {
 		if err := archiveTodoList(selectedList.id); err != nil {
-			fmt.Println("Error archiving list:", err)
+			m.errorMsg = "Failed to archive list: " + err.Error()
 			return
 		}
-		m.todolists[m.listCursorPos].archived = true
+		m.todoLists[m.listCursorPos].archived = true
 		if selectedList.id == m.currentListID {
 			m.switchToFirstNonArchivedList()
 		}
@@ -402,7 +411,7 @@ func (m *model) toggleListArchive() {
 }
 
 func (m *model) switchToFirstNonArchivedList() {
-	for i, list := range m.todolists {
+	for i, list := range m.todoLists {
 		if !list.archived {
 			m.switchToList(i)
 			return
@@ -412,25 +421,26 @@ func (m *model) switchToFirstNonArchivedList() {
 
 func (m *model) handleListSelection() {
 	// "Create New List" option
-	if m.listCursorPos == len(m.todolists) {
+	if m.listCursorPos == len(m.todoLists) {
 		m.startCreateNewList()
 		return
 	}
 	// Switch to selected list
-	if m.listCursorPos < len(m.todolists) {
+	if m.listCursorPos < len(m.todoLists) {
 		m.switchToList(m.listCursorPos)
 		m.closeListSelector()
 	}
 }
 
 func (m *model) switchToList(index int) {
-	if index < 0 || index >= len(m.todolists) {
+	if index < 0 || index >= len(m.todoLists) {
 		return
 	}
 	m.currentListIndex = index
-	m.currentListID = m.todolists[index].id
+	m.currentListID = m.todoLists[index].id
 	m.cursor = 0
 	m.scrollOffset = 0
+	m.invalidateCache()
 }
 
 func (m *model) startCreateNewList() {
@@ -458,33 +468,33 @@ func (m model) handleListNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if listName != "" {
 			if m.listManageAction == "rename" {
 				// Rename existing list
-				if m.listCursorPos < len(m.todolists) {
-					listID := m.todolists[m.listCursorPos].id
+				if m.listCursorPos < len(m.todoLists) {
+					listID := m.todoLists[m.listCursorPos].id
 					if err := updateTodoListName(listID, listName); err != nil {
-						fmt.Println("Error renaming list:", err)
+						m.errorMsg = "Failed to rename list: " + err.Error()
 						m.resetListNameInput()
 						return m, nil
 					}
-					m.todolists[m.listCursorPos].name = listName
+					m.todoLists[m.listCursorPos].name = listName
 				}
 			} else {
 				// Create new list
 				newID, err := createTodoList(listName)
 				if err != nil {
-					fmt.Println("Error creating list:", err)
+					m.errorMsg = "Failed to create list: " + err.Error()
 					m.resetListNameInput()
 					return m, nil
 				}
 				// Reload todolists from database
 				todolists, err := getTodoLists()
 				if err != nil {
-					fmt.Println("Error loading todolists:", err)
+					m.errorMsg = "Failed to load lists: " + err.Error()
 					m.resetListNameInput()
 					return m, nil
 				}
-				m.todolists = todolists
+				m.todoLists = todolists
 				// Switch to the new list
-				for i, list := range m.todolists {
+				for i, list := range m.todoLists {
 					if list.id == newID {
 						m.currentListIndex = i
 						m.currentListID = newID

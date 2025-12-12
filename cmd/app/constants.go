@@ -35,6 +35,9 @@ var (
 				Foreground(lipgloss.Color("#008000"))
 	OverdueStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF6B6B"))
+	ErrorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF0000")).
+			Bold(true)
 )
 
 // Input modes
@@ -86,15 +89,15 @@ const (
 
 // Viewport configuration
 const (
-	ViewportWidth      = 80
-	ViewportHeight     = 20
-	ViewportBaseLines  = 5
-	LinesPerTask       = 3
+	ViewportWidth     = 80
+	ViewportHeight    = 20
+	ViewportBaseLines = 5
+	LinesPerTask      = 3
 	// Viewport height adjustments for different UI modes
-	HeightAdjustDefault     = 6    // Standard modal (edit, new task, due date)
-	HeightAdjustPriority    = 11   // Priority selection
-	HeightAdjustDelete      = 2    // Delete confirmation
-	HeightAdjustListPerItem = 1    // Per list item in list selector
+	HeightAdjustDefault     = 6  // Standard modal (edit, new task, due date)
+	HeightAdjustPriority    = 11 // Priority selection
+	HeightAdjustDelete      = 2  // Delete confirmation
+	HeightAdjustListPerItem = 1  // Per list item in list selector
 )
 
 // Text input configuration
@@ -115,8 +118,8 @@ const (
 
 // Priority style and label maps (initialized in init())
 var (
-	PriorityStyles map[int]lipgloss.Style
-	PriorityLabels map[int]string
+	PriorityStyles         map[int]lipgloss.Style
+	PriorityLabels         map[int]string
 	SelectedPriorityStyles map[int]lipgloss.Style
 )
 

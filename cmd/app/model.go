@@ -1,12 +1,14 @@
 package main
 
 import (
+	"sort"
+
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type todolist struct {
+type todoList struct {
 	id           int
 	name         string
 	displayOrder int
@@ -16,7 +18,7 @@ type todolist struct {
 }
 
 type model struct {
-	items              []todoitem
+	items              []todoItem
 	cursor             int
 	width              int
 	height             int
@@ -35,18 +37,21 @@ type model struct {
 	editDueDateMode    bool
 
 	// Todolist management
-	todolists         []todolist // All available lists
-	currentListID     int        // Currently active list
-	currentListIndex  int        // Index in todolists slice
-	listSelectorOpen  bool       // Is list selector modal open?
-	listCursorPos     int        // Cursor in list selector
+	todoLists          []todoList // All available lists
+	currentListID      int        // Currently active list
+	currentListIndex   int        // Index in todoLists slice
+	listSelectorOpen   bool       // Is list selector modal open?
+	listCursorPos      int        // Cursor in list selector
 	newListInputActive bool       // Creating new list?
-	listManageMode    bool       // Show manage options (r/d/a)?
-	listManageAction  string     // "rename", "delete", "archive"
-	listDeleteConfirm bool       // Confirming delete?
+	listManageMode     bool
+	listManageAction   string
+	listDeleteConfirm  bool
+	errorMsg           string
+	filteredItems      []todoItem
+	filteredListID     int
 }
 
-func intialModel(todoitems []todoitem, todolists []todolist) model {
+func initialModel(todoItems []todoItem, todoLists []todoList) model {
 	ti := textinput.New()
 	ti.Placeholder = "Enter task description..."
 	ti.Focus()
@@ -58,13 +63,13 @@ func intialModel(todoitems []todoitem, todolists []todolist) model {
 	// Default to first list if available
 	currentListID := 0
 	currentListIndex := 0
-	if len(todolists) > 0 {
-		currentListID = todolists[0].id
+	if len(todoLists) > 0 {
+		currentListID = todoLists[0].id
 		currentListIndex = 0
 	}
 
 	return model{
-		items:              todoitems,
+		items:              todoItems,
 		textInput:          ti,
 		inputActive:        false,
 		inputMode:          "",
@@ -78,15 +83,15 @@ func intialModel(todoitems []todoitem, todolists []todolist) model {
 		editMode:           false,
 		editIndex:          -1,
 		editDueDateMode:    false,
-		todolists:          todolists,
-		currentListID:       currentListID,
-		currentListIndex:    currentListIndex,
-		listSelectorOpen:    false,
-		listCursorPos:       0,
-		newListInputActive:  false,
-		listManageMode:      false,
-		listManageAction:    "",
-		listDeleteConfirm:   false,
+		todoLists:          todoLists,
+		currentListID:      currentListID,
+		currentListIndex:   currentListIndex,
+		listSelectorOpen:   false,
+		listCursorPos:      0,
+		newListInputActive: false,
+		listManageMode:     false,
+		listManageAction:   "",
+		listDeleteConfirm:  false,
 	}
 }
 
@@ -95,18 +100,11 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m *model) sortItems() {
-	// Sort by: done status (uncompleted first), then by priority (1 is highest)
-	for i := 0; i < len(m.items); i++ {
-		for j := i + 1; j < len(m.items); j++ {
-			// Compare done status first (false < true, so uncompleted come first)
-			if m.items[i].done && !m.items[j].done {
-				m.items[i], m.items[j] = m.items[j], m.items[i]
-			} else if m.items[i].done == m.items[j].done {
-				// If same done status, sort by priority (lower number = higher priority)
-				if m.items[i].priority > m.items[j].priority {
-					m.items[i], m.items[j] = m.items[j], m.items[i]
-				}
-			}
+	sort.Slice(m.items, func(i, j int) bool {
+		if m.items[i].done != m.items[j].done {
+			return !m.items[i].done
 		}
-	}
+		return m.items[i].priority < m.items[j].priority
+	})
+	m.invalidateCache()
 }
