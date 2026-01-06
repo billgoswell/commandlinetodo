@@ -22,22 +22,54 @@ type todoItem struct {
 
 var db *sql.DB
 
-func initDB() (*sql.DB, error) {
-	var err error
-	db, err = sql.Open("sqlite", "./todo.db")
+func logError(operation string, err error) {
+	fmt.Printf("Failed to %s: %v\n", operation, err)
+}
+
+func now() int64 {
+	return time.Now().Unix()
+}
+
+func executeStmt(operation string, query string, args ...interface{}) error {
+	_, err := db.Exec(query, args...)
 	if err != nil {
-		fmt.Println("Failed to open DB:", err)
+		logError(operation, err)
+		return err
+	}
+	return nil
+}
+
+func executeStmtWithID(operation string, query string, args ...interface{}) (int, error) {
+	result, err := db.Exec(query, args...)
+	if err != nil {
+		logError(operation, err)
+		return 0, err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		logError(operation, err)
+		return 0, err
+	}
+
+	return int(id), nil
+}
+
+func initDB(dbPath string) (*sql.DB, error) {
+	var err error
+	db, err = sql.Open("sqlite", dbPath)
+	if err != nil {
+		logError("open database at "+dbPath, err)
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		fmt.Println("Failed to enable foreign keys:", err)
+	if err := executeStmt("enable foreign keys", "PRAGMA foreign_keys = ON"); err != nil {
 		return nil, err
 	}
 
 	if err := createTableIfNotExists(); err != nil {
-		fmt.Println("Failed to create table:", err)
+		logError("create table", err)
 		return nil, err
 	}
 
@@ -49,20 +81,18 @@ func initDB() (*sql.DB, error) {
 }
 
 func createTableIfNotExists() error {
-	// Create todoLists table
-	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS todoLists (
+	if err := executeStmt("create todoLists table", `CREATE TABLE IF NOT EXISTS todoLists (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		name TEXT NOT NULL,
 		display_order INTEGER DEFAULT 0,
 		archived BOOLEAN DEFAULT 0,
 		created_at INTEGER,
 		updated_at INTEGER
-	)`)
-	if err != nil {
+	)`); err != nil {
 		return err
 	}
 
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS tasks (
+	return executeStmt("create tasks table", `CREATE TABLE IF NOT EXISTS tasks (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		todo TEXT NOT NULL,
 		priority INTEGER DEFAULT 4,
@@ -75,7 +105,6 @@ func createTableIfNotExists() error {
 		todoList_id INTEGER DEFAULT 1,
 		FOREIGN KEY (todoList_id) REFERENCES todoLists(id)
 	)`)
-	return err
 }
 
 func getItemsFromDB() ([]todoItem, error) {
@@ -93,6 +122,8 @@ func getItemsFromDB() ([]todoItem, error) {
 			fmt.Println("Failed to scan item:", err)
 			return []todoItem{}, err
 		}
+		// Validate priority to ensure it's a valid value (1-4)
+		item.priority = validatePriority(item.priority)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -104,42 +135,25 @@ func getItemsFromDB() ([]todoItem, error) {
 }
 
 func saveItemToDB(item todoItem) error {
-	_, err := db.Exec(
+	return executeStmt("insert item",
 		"INSERT INTO tasks (todo, priority, done, dateAdded, dueDate, deleted, todoList_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-		item.todo, item.priority, item.done, time.Now().Unix(), item.dueDate, 0, item.todoListID,
+		item.todo, item.priority, item.done, now(), item.dueDate, 0, item.todoListID,
 	)
-	if err != nil {
-		fmt.Println("Failed to insert item:", err)
-		return err
-	}
-	return nil
 }
 
 func updateItemInDB(item todoItem) error {
-	_, err := db.Exec(
+	return executeStmt("update item",
 		"UPDATE tasks SET todo = ?, done = ?, priority = ?, dateCompleted = ?, dueDate = ?, todoList_id = ? WHERE id = ?",
 		item.todo, item.done, item.priority, item.dateCompleted, item.dueDate, item.todoListID, item.id,
 	)
-	if err != nil {
-		fmt.Println("Failed to update item:", err)
-		return err
-	}
-	return nil
 }
 
 func markItemAsDeleted(id int) error {
-	_, err := db.Exec(
+	return executeStmt("delete item",
 		"UPDATE tasks SET deleted = 1, deletedAt = ? WHERE id = ?",
-		time.Now().Unix(), id,
+		now(), id,
 	)
-	if err != nil {
-		fmt.Println("Failed to delete item:", err)
-		return err
-	}
-	return nil
 }
-
-// Todolist management functions
 
 func getTodoLists() ([]todoList, error) {
 	rows, err := db.Query("SELECT id, name, display_order, archived, created_at, updated_at FROM todoLists WHERE archived = 0 ORDER BY display_order")
@@ -167,103 +181,91 @@ func getTodoLists() ([]todoList, error) {
 }
 
 func createTodoList(name string) (int, error) {
-	now := time.Now().Unix()
-	result, err := db.Exec(
+	return executeStmtWithID("create todo list",
 		"INSERT INTO todoLists (name, display_order, archived, created_at, updated_at) VALUES (?, (SELECT COUNT(*) FROM todoLists), 0, ?, ?)",
-		name, now, now,
+		name, now(), now(),
 	)
-	if err != nil {
-		fmt.Println("Failed to create todoList:", err)
-		return 0, err
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		fmt.Println("Failed to get last insert id:", err)
-		return 0, err
-	}
-
-	return int(id), nil
 }
 
 func updateTodoListName(id int, name string) error {
-	now := time.Now().Unix()
-	_, err := db.Exec(
+	return executeStmt("update todo list name",
 		"UPDATE todoLists SET name = ?, updated_at = ? WHERE id = ?",
-		name, now, id,
+		name, now(), id,
 	)
-	if err != nil {
-		fmt.Println("Failed to update todoList name:", err)
-		return err
-	}
-	return nil
 }
 
 func deleteTodoList(id int) error {
 	tx, err := db.Begin()
 	if err != nil {
-		fmt.Println("Failed to begin transaction:", err)
+		logError("begin transaction", err)
 		return err
 	}
 	defer tx.Rollback()
 
-	now := time.Now().Unix()
+	timestamp := now()
 
-	// Archive the list
 	_, err = tx.Exec(
 		"UPDATE todoLists SET archived = 1, updated_at = ? WHERE id = ?",
-		now, id,
+		timestamp, id,
 	)
 	if err != nil {
-		fmt.Println("Failed to archive todoList:", err)
+		logError("archive todo list", err)
 		return err
 	}
 
-	// Mark all tasks in this list as deleted
 	_, err = tx.Exec(
 		"UPDATE tasks SET deleted = 1, deletedAt = ? WHERE todoList_id = ? AND deleted = 0",
-		now, id,
+		timestamp, id,
 	)
 	if err != nil {
-		fmt.Println("Failed to delete tasks in list:", err)
+		logError("delete tasks in list", err)
 		return err
 	}
 
 	return tx.Commit()
 }
 
-func archiveTodoList(id int) error {
-	now := time.Now().Unix()
-	_, err := db.Exec(
-		"UPDATE todoLists SET archived = 1, updated_at = ? WHERE id = ?",
-		now, id,
-	)
-	if err != nil {
-		fmt.Println("Failed to archive todoList:", err)
-		return err
+func setTodoListArchived(id int, archived bool) error {
+	operation := "archive todo list"
+	if !archived {
+		operation = "unarchive todo list"
 	}
-	return nil
+
+	return executeStmt(operation,
+		"UPDATE todoLists SET archived = ?, updated_at = ? WHERE id = ?",
+		archived, now(), id,
+	)
+}
+
+func archiveTodoList(id int) error {
+	return setTodoListArchived(id, true)
 }
 
 func unarchiveTodoList(id int) error {
-	now := time.Now().Unix()
-	_, err := db.Exec(
-		"UPDATE todoLists SET archived = 0, updated_at = ? WHERE id = ?",
-		now, id,
-	)
-	if err != nil {
-		fmt.Println("Failed to unarchive todoList:", err)
-		return err
-	}
-	return nil
+	return setTodoListArchived(id, false)
 }
 
 func fixExistingTaskListIDs() error {
-	// Set all tasks with todoList_id = 0 or NULL to 1 (General list)
-	_, err := db.Exec("UPDATE tasks SET todoList_id = 1 WHERE todoList_id IS NULL OR todoList_id = 0")
-	if err != nil {
-		fmt.Println("Warning: failed to fix task list IDs:", err)
+	if err := executeStmt("fix task list IDs",
+		"UPDATE tasks SET todoList_id = 1 WHERE todoList_id IS NULL OR todoList_id = 0",
+	); err != nil {
 		return err
 	}
+
+	return verifyTaskListIDs()
+}
+
+func verifyTaskListIDs() error {
+	var orphanedCount int
+	err := db.QueryRow("SELECT COUNT(*) FROM tasks WHERE deleted = 0 AND (todoList_id IS NULL OR todoList_id = 0)").Scan(&orphanedCount)
+	if err != nil {
+		logError("verify task list IDs", err)
+		return err
+	}
+
+	if orphanedCount > 0 {
+		return fmt.Errorf("data integrity error: found %d orphaned tasks with invalid list IDs", orphanedCount)
+	}
+
 	return nil
 }

@@ -48,6 +48,32 @@ const (
 	InputModeListName = "listname"
 )
 
+// App states - Main UI states
+type AppState int
+
+const (
+	StateMainBrowse AppState = iota
+	StateTaskInput
+	StatePrioritySelection
+	StateDueDateInput
+	StateEditTask
+	StateDeleteConfirm
+	StateListSelector
+	StateListNameInput
+)
+
+// Sub-states - Context modifiers for complex states
+type SubState int
+
+const (
+	SubStateNone SubState = iota
+	SubStateListManage
+	SubStateListDeleteConfirm
+	SubStateEditDueDate
+	SubStateListRename
+	SubStateListCreate
+)
+
 // Priority levels
 const (
 	PriorityHigh    = 1
@@ -93,11 +119,6 @@ const (
 	ViewportHeight    = 20
 	ViewportBaseLines = 5
 	LinesPerTask      = 3
-	// Viewport height adjustments for different UI modes
-	HeightAdjustDefault     = 6  // Standard modal (edit, new task, due date)
-	HeightAdjustPriority    = 11 // Priority selection
-	HeightAdjustDelete      = 2  // Delete confirmation
-	HeightAdjustListPerItem = 1  // Per list item in list selector
 )
 
 // Text input configuration
@@ -109,21 +130,40 @@ const (
 // Default values
 const (
 	DefaultPriority = PriorityMed
+	DefaultListName = "General"
+)
+
+// UI text
+const (
+	TextInputPlaceholder = "Enter task description..."
 )
 
 // Time calculations
 const (
 	SecondsPerDay = 24 * 3600
+	MaxDaysOffset = 36500 // 100 years
 )
 
-// Priority style and label maps (initialized in init())
 var (
 	PriorityStyles         map[int]lipgloss.Style
 	PriorityLabels         map[int]string
 	SelectedPriorityStyles map[int]lipgloss.Style
+	StateHeightAdjustments map[AppState]int
 )
 
 func init() {
+
+	StateHeightAdjustments = map[AppState]int{
+		StateMainBrowse:        0,
+		StateTaskInput:         6,
+		StatePrioritySelection: 11,
+		StateDueDateInput:      6,
+		StateEditTask:          6,
+		StateDeleteConfirm:     2,
+		StateListSelector:      0,
+		StateListNameInput:     6,
+	}
+
 	PriorityStyles = map[int]lipgloss.Style{
 		PriorityHigh:    OneStyle,
 		PriorityMedHigh: TwoStyle,

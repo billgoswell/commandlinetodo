@@ -8,34 +8,34 @@ import (
 )
 
 func main() {
-	_, err := initDB()
+	cfg := LoadConfig()
+
+	_, err := initDB(cfg.DBPath)
 	if err != nil {
-		fmt.Println("Failed to initialize database:", err)
+		logErrorMsg("initialize database", err)
 		os.Exit(1)
 	}
 	defer db.Close()
 
-	// Load todoLists
 	todoLists, err := getTodoLists()
 	if err != nil {
-		fmt.Println("Failed to load todoLists:", err)
-		return
+		logErrorMsg("load todo lists", err)
+		os.Exit(1)
 	}
 
-	// If no lists exist, create a default "General" list
 	if len(todoLists) == 0 {
-		id, err := createTodoList("General")
+		id, err := createTodoList(DefaultListName)
 		if err != nil {
-			fmt.Println("Failed to create default todoList:", err)
-			return
+			logErrorMsg("create default todo list", err)
+			os.Exit(1)
 		}
-		todoLists = []todoList{{id: id, name: "General", archived: false}}
+		todoLists = []todoList{{id: id, name: DefaultListName, archived: false}}
 	}
 
 	todoItems, err := getItemsFromDB()
 	if err != nil {
-		fmt.Println("Failed to load items:", err)
-		return
+		logErrorMsg("load items from database", err)
+		os.Exit(1)
 	}
 	m := initialModel(todoItems, todoLists)
 	m.sortItems()
