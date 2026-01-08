@@ -57,7 +57,17 @@ func (m model) View() string {
 	if m.errorMsg != "" {
 		s = append(s, ErrorStyle.Render("Error: "+m.errorMsg))
 	}
-	s = append(s, "Press l for lists, a to add, e to edit, t to set due date, d to delete, q to quit.\n")
+
+	// Add sync status if enabled
+	if m.syncEnabled {
+		s = append(s, m.renderSyncStatus())
+	}
+
+	s = append(s, "Press l for lists, a to add, e to edit, t to set due date, d to delete, q to quit.")
+	if m.syncEnabled {
+		s = append(s, "Press s to sync.")
+	}
+	s = append(s, "")
 	return strings.Join(s, "\n")
 }
 
@@ -294,4 +304,55 @@ func (m *model) getVisibleItemActualIndex(visibleIndex int) int {
 
 func (m *model) countTasksInList(listID int) int {
 	return len(m.filterItemsByList(listID))
+}
+
+// renderSyncStatus renders the sync status indicator
+func (m *model) renderSyncStatus() string {
+	var statusLine string
+
+	if !m.syncEnabled {
+		return ""
+	}
+
+	// Determine status indicator
+	if m.syncStatus.syncing {
+		statusLine = "↻ Syncing..."
+	} else if !m.syncStatus.online {
+		statusLine = "● Offline (local mode)"
+	} else if m.syncStatus.errorMessage != "" {
+		statusLine = "✗ Sync error: " + m.syncStatus.errorMessage
+	} else if m.syncStatus.lastSyncTime > 0 {
+		timeSince := time.Since(time.Unix(m.syncStatus.lastSyncTime, 0))
+		statusLine = fmt.Sprintf("✓ Synced %s ago", formatDuration(timeSince))
+	} else {
+		statusLine = "✓ Ready to sync"
+	}
+
+	return TitleStyle.Render(statusLine)
+}
+
+// formatDuration formats a duration in a user-friendly way
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return "just now"
+	}
+	if d < time.Hour {
+		minutes := int(d.Minutes())
+		if minutes == 1 {
+			return "1 minute"
+		}
+		return fmt.Sprintf("%d minutes", minutes)
+	}
+	if d < 24*time.Hour {
+		hours := int(d.Hours())
+		if hours == 1 {
+			return "1 hour"
+		}
+		return fmt.Sprintf("%d hours", hours)
+	}
+	days := int(d.Hours()) / 24
+	if days == 1 {
+		return "1 day"
+	}
+	return fmt.Sprintf("%d days", days)
 }

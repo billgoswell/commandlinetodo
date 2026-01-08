@@ -10,11 +10,33 @@ import (
 
 type todoList struct {
 	id           int
+	clientID     string // UUID for offline-first sync
+	serverID     int    // Server's ID (0 if not synced yet)
 	name         string
 	displayOrder int
 	archived     bool
 	createdAt    int64
 	updatedAt    int64
+	version      int // For conflict detection
+}
+
+// Change represents a local change pending sync
+type Change struct {
+	id         int
+	entityType string // "task" or "list"
+	entityID   int
+	changeType string // "create", "update", "delete"
+	timestamp  int64
+	synced     bool
+}
+
+// SyncStatus tracks the synchronization state
+type SyncStatus struct {
+	online        bool
+	syncing       bool
+	lastSyncTime  int64
+	pendingCount  int
+	errorMessage  string
 }
 
 type TaskCreationFlowStep int
@@ -107,6 +129,9 @@ type model struct {
 	taskFlow            TaskCreationFlow
 	currentState        AppState
 	currentSubState     SubState
+	syncEnabled         bool
+	syncStatus          SyncStatus
+	store               DataStore // Data access layer
 }
 
 func initialModel(todoItems []todoItem, todoLists []todoList) model {

@@ -103,6 +103,7 @@ const (
 	KeyR     = "r"
 	KeyL     = "l"
 	KeyM     = "m"
+	KeyS     = "s"
 )
 
 // Priority selection keys

@@ -5,10 +5,13 @@ import (
 	"fmt"
 	_ "modernc.org/sqlite"
 	"time"
+	"github.com/google/uuid"
 )
 
 type todoItem struct {
 	id            int
+	clientID      string // UUID for offline-first sync
+	serverID      int    // Server's ID (0 if not synced yet)
 	done          bool
 	todo          string
 	priority      int
@@ -18,6 +21,7 @@ type todoItem struct {
 	deleted       bool
 	deletedAt     int64
 	todoListID    int
+	version       int // For conflict detection
 }
 
 var db *sql.DB
@@ -73,6 +77,16 @@ func initDB(dbPath string) (*sql.DB, error) {
 		return nil, err
 	}
 
+	if err := createSyncTables(); err != nil {
+		logError("create sync tables", err)
+		return nil, err
+	}
+
+	if err := migrateSyncColumns(); err != nil {
+		logError("migrate sync columns", err)
+		return nil, err
+	}
+
 	if err := fixExistingTaskListIDs(); err != nil {
 		fmt.Println("Warning: failed to fix task list IDs:", err)
 	}
@@ -108,7 +122,7 @@ func createTableIfNotExists() error {
 }
 
 func getItemsFromDB() ([]todoItem, error) {
-	rows, err := db.Query("SELECT id, todo, priority, done, dateAdded, dateCompleted, dueDate, deleted, deletedAt, todoList_id FROM tasks WHERE deleted = 0 ORDER BY id")
+	rows, err := db.Query("SELECT id, todo, priority, done, dateAdded, dateCompleted, dueDate, deleted, deletedAt, todoList_id, COALESCE(client_id, ''), COALESCE(server_id, 0), COALESCE(version, 1) FROM tasks WHERE deleted = 0 ORDER BY id")
 	if err != nil {
 		fmt.Println("Failed to query items:", err)
 		return []todoItem{}, err
@@ -118,12 +132,16 @@ func getItemsFromDB() ([]todoItem, error) {
 	items := []todoItem{}
 	for rows.Next() {
 		var item todoItem
-		if err := rows.Scan(&item.id, &item.todo, &item.priority, &item.done, &item.dateAdded, &item.dateCompleted, &item.dueDate, &item.deleted, &item.deletedAt, &item.todoListID); err != nil {
+		if err := rows.Scan(&item.id, &item.todo, &item.priority, &item.done, &item.dateAdded, &item.dateCompleted, &item.dueDate, &item.deleted, &item.deletedAt, &item.todoListID, &item.clientID, &item.serverID, &item.version); err != nil {
 			fmt.Println("Failed to scan item:", err)
 			return []todoItem{}, err
 		}
 		// Validate priority to ensure it's a valid value (1-4)
 		item.priority = validatePriority(item.priority)
+		// Generate client ID if missing (for backward compatibility)
+		if item.clientID == "" {
+			item.clientID = generateClientID()
+		}
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -156,7 +174,7 @@ func markItemAsDeleted(id int) error {
 }
 
 func getTodoLists() ([]todoList, error) {
-	rows, err := db.Query("SELECT id, name, display_order, archived, created_at, updated_at FROM todoLists WHERE archived = 0 ORDER BY display_order")
+	rows, err := db.Query("SELECT id, name, display_order, archived, created_at, updated_at, COALESCE(client_id, ''), COALESCE(server_id, 0), COALESCE(version, 1) FROM todoLists WHERE archived = 0 ORDER BY display_order")
 	if err != nil {
 		fmt.Println("Failed to query todoLists:", err)
 		return []todoList{}, err
@@ -166,9 +184,13 @@ func getTodoLists() ([]todoList, error) {
 	lists := []todoList{}
 	for rows.Next() {
 		var list todoList
-		if err := rows.Scan(&list.id, &list.name, &list.displayOrder, &list.archived, &list.createdAt, &list.updatedAt); err != nil {
+		if err := rows.Scan(&list.id, &list.name, &list.displayOrder, &list.archived, &list.createdAt, &list.updatedAt, &list.clientID, &list.serverID, &list.version); err != nil {
 			fmt.Println("Failed to scan todoList:", err)
 			return []todoList{}, err
+		}
+		// Generate client ID if missing (for backward compatibility)
+		if list.clientID == "" {
+			list.clientID = generateClientID()
 		}
 		lists = append(lists, list)
 	}
@@ -268,4 +290,170 @@ func verifyTaskListIDs() error {
 	}
 
 	return nil
+}
+
+// Sync infrastructure functions
+
+func generateClientID() string {
+	return uuid.New().String()
+}
+
+func createSyncTables() error {
+	// Create sync metadata table
+	if err := executeStmt("create sync_metadata table", `CREATE TABLE IF NOT EXISTS sync_metadata (
+		key TEXT PRIMARY KEY,
+		value TEXT
+	)`); err != nil {
+		return err
+	}
+
+	// Create change log table
+	return executeStmt("create change_log table", `CREATE TABLE IF NOT EXISTS change_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		entity_type TEXT NOT NULL,
+		entity_id INTEGER NOT NULL,
+		change_type TEXT NOT NULL,
+		timestamp INTEGER NOT NULL,
+		synced BOOLEAN DEFAULT 0
+	)`)
+}
+
+func columnExists(tableName, columnName string) (bool, error) {
+	var name string
+	err := db.QueryRow(
+		"SELECT name FROM pragma_table_info(?) WHERE name = ?",
+		tableName, columnName,
+	).Scan(&name)
+
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func migrateSyncColumns() error {
+	// Check and add sync columns to todoLists
+	if exists, err := columnExists("todoLists", "client_id"); err != nil {
+		return err
+	} else if !exists {
+		if err := executeStmt("add client_id to todoLists",
+			"ALTER TABLE todoLists ADD COLUMN client_id TEXT"); err != nil {
+			return err
+		}
+	}
+
+	if exists, err := columnExists("todoLists", "server_id"); err != nil {
+		return err
+	} else if !exists {
+		if err := executeStmt("add server_id to todoLists",
+			"ALTER TABLE todoLists ADD COLUMN server_id INTEGER DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+
+	if exists, err := columnExists("todoLists", "version"); err != nil {
+		return err
+	} else if !exists {
+		if err := executeStmt("add version to todoLists",
+			"ALTER TABLE todoLists ADD COLUMN version INTEGER DEFAULT 1"); err != nil {
+			return err
+		}
+	}
+
+	// Check and add sync columns to tasks
+	if exists, err := columnExists("tasks", "client_id"); err != nil {
+		return err
+	} else if !exists {
+		if err := executeStmt("add client_id to tasks",
+			"ALTER TABLE tasks ADD COLUMN client_id TEXT"); err != nil {
+			return err
+		}
+	}
+
+	if exists, err := columnExists("tasks", "server_id"); err != nil {
+		return err
+	} else if !exists {
+		if err := executeStmt("add server_id to tasks",
+			"ALTER TABLE tasks ADD COLUMN server_id INTEGER DEFAULT 0"); err != nil {
+			return err
+		}
+	}
+
+	if exists, err := columnExists("tasks", "version"); err != nil {
+		return err
+	} else if !exists {
+		if err := executeStmt("add version to tasks",
+			"ALTER TABLE tasks ADD COLUMN version INTEGER DEFAULT 1"); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func logChange(entityType string, entityID int, changeType string) error {
+	return executeStmt("log change",
+		"INSERT INTO change_log (entity_type, entity_id, change_type, timestamp, synced) VALUES (?, ?, ?, ?, 0)",
+		entityType, entityID, changeType, now(),
+	)
+}
+
+func getPendingChanges() ([]Change, error) {
+	rows, err := db.Query("SELECT id, entity_type, entity_id, change_type, timestamp, synced FROM change_log WHERE synced = 0 ORDER BY timestamp")
+	if err != nil {
+		logError("query pending changes", err)
+		return []Change{}, err
+	}
+	defer rows.Close()
+
+	changes := []Change{}
+	for rows.Next() {
+		var change Change
+		if err := rows.Scan(&change.id, &change.entityType, &change.entityID, &change.changeType, &change.timestamp, &change.synced); err != nil {
+			logError("scan change", err)
+			return []Change{}, err
+		}
+		changes = append(changes, change)
+	}
+
+	if err := rows.Err(); err != nil {
+		logError("iterate changes", err)
+		return []Change{}, err
+	}
+
+	return changes, nil
+}
+
+func markChangeSynced(changeID int) error {
+	return executeStmt("mark change synced",
+		"UPDATE change_log SET synced = 1 WHERE id = ?",
+		changeID,
+	)
+}
+
+func getLastSyncTime() (int64, error) {
+	var timestamp int64
+	err := db.QueryRow("SELECT value FROM sync_metadata WHERE key = 'last_sync_time'").Scan(&timestamp)
+
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		logError("get last sync time", err)
+		return 0, err
+	}
+
+	return timestamp, nil
+}
+
+func setLastSyncTime(timestamp int64) error {
+	// Use INSERT OR REPLACE to handle both insert and update
+	return executeStmt("set last sync time",
+		"INSERT OR REPLACE INTO sync_metadata (key, value) VALUES ('last_sync_time', ?)",
+		fmt.Sprintf("%d", timestamp),
+	)
 }

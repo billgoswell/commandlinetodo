@@ -45,9 +45,10 @@ func (m *model) handleEditMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.input.itemIndex >= 0 && m.input.itemIndex < len(m.items) {
 			m.items[m.input.itemIndex].todo = editedText
 			m.items[m.input.itemIndex].todoListID = m.currentListID
-			if err := updateItemInDB(m.items[m.input.itemIndex]); err != nil {
+			if err := m.store.UpdateItem(m.items[m.input.itemIndex]); err != nil {
 				m.errorMsg = "Failed to update task: " + err.Error()
 			}
+			m.invalidateCache()
 		}
 		m.returnToMain()
 		return m, nil
@@ -63,13 +64,14 @@ func (m *model) handleDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case KeyY:
 		actualIndex := m.getVisibleItemActualIndex(m.input.deleteIndex)
 		if actualIndex >= 0 && actualIndex < len(m.items) {
-			if err := markItemAsDeleted(m.items[actualIndex].id); err != nil {
+			if err := m.store.DeleteItem(m.items[actualIndex].id); err != nil {
 				m.errorMsg = "Failed to delete task: " + err.Error()
 			}
 			m.items = append(m.items[:actualIndex], m.items[actualIndex+1:]...)
 			if m.cursor >= m.getVisibleItemCount() && m.cursor > 0 {
 				m.cursor--
 			}
+			m.invalidateCache()
 			m.sortItems()
 		}
 		m.returnToMain()
@@ -104,7 +106,7 @@ func (m *model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.currentSubState == SubStateListRename {
 			if m.input.listIndex < len(m.todoLists) {
 				listID := m.todoLists[m.input.listIndex].id
-				if err := updateTodoListName(listID, listName); err != nil {
+				if err := m.store.UpdateTodoListName(listID, listName); err != nil {
 					m.errorMsg = "Failed to rename list: " + err.Error()
 					m.returnToMain()
 					return m, nil
@@ -112,13 +114,13 @@ func (m *model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.todoLists[m.input.listIndex].name = listName
 			}
 		} else {
-			newID, err := createTodoList(listName)
+			newID, err := m.store.CreateTodoList(listName)
 			if err != nil {
 				m.errorMsg = "Failed to create list: " + err.Error()
 				m.returnToMain()
 				return m, nil
 			}
-			todolists, err := getTodoLists()
+			todolists, err := m.store.GetTodoLists()
 			if err != nil {
 				m.errorMsg = "Failed to load lists: " + err.Error()
 				m.returnToMain()
@@ -186,7 +188,7 @@ func (m *model) handleTaskCreationFlow(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.currentSubState == SubStateEditDueDate && m.input.itemIndex >= 0 && m.input.itemIndex < len(m.items) {
 				m.items[m.input.itemIndex].dueDate = dueDate
 				m.items[m.input.itemIndex].todoListID = m.currentListID
-				if err := updateItemInDB(m.items[m.input.itemIndex]); err != nil {
+				if err := m.store.UpdateItem(m.items[m.input.itemIndex]); err != nil {
 					m.errorMsg = "Failed to update task: " + err.Error()
 				}
 				m.invalidateCache()
@@ -199,7 +201,7 @@ func (m *model) handleTaskCreationFlow(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					dueDate:    dueDate,
 					todoListID: m.currentListID,
 				}
-				if err := saveItemToDB(newTask); err != nil {
+				if err := m.store.SaveItem(newTask); err != nil {
 					m.errorMsg = "Failed to save task: " + err.Error()
 				}
 				m.items = append(m.items, newTask)
@@ -253,6 +255,23 @@ func (m *model) handleMainKeyboard(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case KeyL:
 		m.input.listIndex = m.currentListIndex
 		m.setState(StateListSelector, SubStateNone)
+		return m, nil
+	case KeyS:
+		if m.syncEnabled {
+			if syncStore, ok := m.store.(*SyncStore); ok {
+				m.syncStatus.syncing = true
+				return m, func() tea.Msg {
+					if err := syncStore.FullSync(); err != nil {
+						m.syncStatus.errorMessage = err.Error()
+					} else {
+						m.syncStatus.errorMessage = ""
+						m.syncStatus.lastSyncTime = time.Now().Unix()
+					}
+					m.syncStatus.syncing = false
+					return nil
+				}
+			}
+		}
 		return m, nil
 	case KeyUp, KeyK:
 		if m.cursor > 0 {
@@ -309,9 +328,10 @@ func (m *model) toggleTaskDone(visibleIndex int) {
 	} else {
 		m.items[actualIndex].dateCompleted = 0
 	}
-	if err := updateItemInDB(m.items[actualIndex]); err != nil {
+	if err := m.store.UpdateItem(m.items[actualIndex]); err != nil {
 		m.errorMsg = "Failed to update task: " + err.Error()
 	}
+	m.invalidateCache()
 	m.sortItems()
 }
 
@@ -380,7 +400,7 @@ func (m *model) deleteCurrentList() {
 	}
 
 	selectedListID := m.todoLists[m.input.listIndex].id
-	if err := deleteTodoList(selectedListID); err != nil {
+	if err := m.store.DeleteTodoList(selectedListID); err != nil {
 		m.errorMsg = "Failed to delete list: " + err.Error()
 		m.currentSubState = SubStateNone
 		return
@@ -422,13 +442,13 @@ func (m *model) toggleListArchive() {
 
 	selectedList := m.todoLists[m.input.listIndex]
 	if selectedList.archived {
-		if err := unarchiveTodoList(selectedList.id); err != nil {
+		if err := m.store.UnarchiveTodoList(selectedList.id); err != nil {
 			m.errorMsg = "Failed to unarchive list: " + err.Error()
 			return
 		}
 		m.todoLists[m.input.listIndex].archived = false
 	} else {
-		if err := archiveTodoList(selectedList.id); err != nil {
+		if err := m.store.ArchiveTodoList(selectedList.id); err != nil {
 			m.errorMsg = "Failed to archive list: " + err.Error()
 			return
 		}
